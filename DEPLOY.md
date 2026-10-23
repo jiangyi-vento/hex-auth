@@ -629,3 +629,25 @@ systemctl status docker --no-pager | head -3   # 应为 active (running)
 
 多次密码输错后出现 `Connection timed out`：可能是 fail2ban/防爆破临时封禁，
 等待几分钟后重试；或用阿里云控制台 VNC 登录执行 `fail2ban-client set sshd unbanip <你的IP>`（如部署了 fail2ban）。
+
+### 9.7 运行期报 `1406 Data too long for column 'private_key'`
+
+现象：管理后台创建产品返回 500，后端日志出现
+`DataError: (1406, "Data too long for column 'private_key' at row 1")`。
+
+原因：私钥改为加密存储后，入库内容为 `enc:` 前缀 + Fernet 密文（约 2360 字符），
+超出旧的 `VARCHAR(2000)` 列宽。本地回归测试跑在 SQLite 上——它不校验
+VARCHAR 长度，因此未能提前拦截，到 MySQL 才暴露。
+
+处理（列扩容为 TEXT，数据无损）：
+
+```bash
+cd /opt/hex-auth
+git pull
+docker compose exec -T mysql sh -c 'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" hex_auth -e "ALTER TABLE products MODIFY COLUMN private_key TEXT NOT NULL;"'
+docker compose up -d --build backend    # 同步模型代码，新库建表才会是 TEXT
+```
+
+> 经验：任何涉及「入库内容形态改变」（如加密、压缩、序列化方式变更）的改动，
+> 都要检查目标列容量并写一条对应的 `backend/sql/*.sql` 升级脚本；
+> 仅在 SQLite 上跑的测试无法发现列宽类问题。
