@@ -437,32 +437,71 @@ gunzip -c /var/backups/hex-auth/hex_auth_2026-10-23_031700.sql.gz |   sudo docke
 ### 用数据库客户端连接（Navicat / DataGrip / DBeaver）
 
 默认 MySQL **不映射任何宿主机端口**（安全设计），从本机直连会报
-`10061 connection refused`，这是正常的。
+`10061 connection refused`，这是正常的，不是配置错误。
 
-**推荐：SSH 隧道 + 仅本机端口映射**
+**推荐做法：SSH 隧道（不需要对公网开放数据库）**
 
-1. 在服务器上临时把 3306 发布到回环地址（只监听 127.0.0.1，公网仍不可达）：
+#### 第一步：服务器上把 3306 只映射到回环地址
 
-   ```bash
-   cd /opt/hex-auth
-   # 在 docker-compose.yml 的 mysql 服务下增加 ports 段：
-   #   ports:
-   #     - "127.0.0.1:3306:3306"
-   sudo docker compose up -d mysql      # 会重建 mysql 容器，数据卷不受影响
-   ss -lntp | grep 3306                 # 应显示 127.0.0.1:3306
-   ```
+编辑 `/opt/hex-auth/docker-compose.yml`，在 `mysql:` 服务下增加 `ports`（缩进与 `environment:` 对齐）：
 
-2. 客户端配置（以 Navicat 为例）：
+```yaml
+  mysql:
+    image: mysql:8.0
+    container_name: hex-auth-mysql
+    restart: always
+    ports:
+      - "127.0.0.1:3306:3306"      # 只监听本机，公网不可达
+    environment:
+      ...
+```
 
-   | 配置页 | 值 |
-   | --- | --- |
-   | SSH 隧道 | 主机=服务器公网IP，端口=22，用户=root，认证=密码/私钥 |
-   | 常规 | 主机=`127.0.0.1`，端口=`3306`，用户=`hexauth` |
-   | 数据库 | `hex_auth` |
+```bash
+cd /opt/hex-auth
+sudo docker compose up -d mysql      # 重建 mysql 容器，数据卷不受影响
+ss -lntp | grep 3306                 # 应显示 127.0.0.1:3306
+```
 
-   DataGrip/DBeaver 同理：先启用 SSH tunnel，数据库主机填 `127.0.0.1`。
+#### 第二步：客户端开 SSH 隧道
 
-3. 用完想恢复严格隔离，删掉 `ports` 段后 `docker compose up -d mysql` 即可。
+Navicat 的配置分成两页，**两页的账号密码完全不同，最容易填错**：
+
+| 配置页 | 字段 | 值 |
+| --- | --- | --- |
+| **SSH 隧道** | 主机 / 端口 | 服务器公网 IP / `22` |
+| | **用户名** | **`root`**（服务器 SSH 账号） |
+| | 认证方式 / 密码 | 密码（或 Public Key） |
+| | **密码** | **服务器 root 密码**（不是数据库密码） |
+| **常规** | 主机 / 端口 | `127.0.0.1` / `3306` |
+| | 用户名 | `hexauth` |
+| | 密码 | 根 `.env` 里的 `MYSQL_PASSWORD` |
+| | 数据库 | `hex_auth` |
+
+要点：
+
+- 常规页的主机必须填 `127.0.0.1`，它是从**服务器本地**解析的，走 SSH 隧道出口
+- DataGrip / DBeaver 同理：先勾选 SSH tunnel，数据库 host 填 `127.0.0.1`
+
+#### 第三步（可选）：用完恢复严格隔离
+
+删掉 `ports` 段，再执行 `sudo docker compose up -d mysql`。
+
+#### 排错
+
+| 报错 | 原因与处理 |
+| --- | --- |
+| `10061 connection refused` | MySQL 未映射端口（默认状态），按上面第一步开启 |
+| `Access denied for 'password'. Authentication that can continue: publickey,...,password (31)` | 这是 **SSH 层**报错：SSH 页的「用户名」栏被填成了 `password`，应填 `root`，密码放到「密码」栏 |
+| `Permission denied (publickey,...)` | 服务器禁止 root 密码登录。检查 `grep -i "^PermitRootLogin" /etc/ssh/sshd_config`，改为 `yes` 后 `systemctl restart sshd`；或改用密钥认证 |
+| 报 `Access denied for user 'hexauth'@...` | 已经连上 MySQL，是数据库密码不对：核对根 `.env` 的 `MYSQL_PASSWORD` 与 `DATABASE_URL` 中是否一致 |
+
+先在命令行验证 SSH 本身是否连通（Windows PowerShell）：
+
+```powershell
+ssh root@<服务器IP>
+```
+
+能登入才说明账号密码没问题，再回去核对客户端两个页面的字段。
 
 **不开放端口的方式（只做临时查询）**
 
@@ -472,8 +511,8 @@ sudo docker compose exec mysql mysql -uhexauth -p hex_auth
 sudo docker compose exec -T mysql sh -c 'exec mysql -uhexauth -p"$MYSQL_PASSWORD" hex_auth -e "SHOW TABLES;"'
 ```
 
-> ⚠️ 不要把 3306 映射成 `0.0.0.0:3306`。一旦暴露公网，MySQL 会持续被暴力破解扫描。
-> 必须直连时，也要配合安全组只放行你自己的出口 IP。
+> ⚠️ 不要把 3306 映射成 `0.0.0.0:3306` 或 `"3306:3306"`。一旦暴露公网，MySQL 会持续被
+> 暴力破解扫描。必须直连时，也要配合安全组只放行你自己的出口 IP。
 
 ### 日志与资源
 
