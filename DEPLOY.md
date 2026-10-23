@@ -119,6 +119,10 @@ sudo firewall-cmd --list-services
 
 **云厂商安全组**：阿里云/腾讯云/华为云需在控制台的安全组入方向规则中放行
 `22`、`80`、`443`。这一层独立于服务器内的 firewalld/ufw，只开其中一个不够。
+
+> ⚠️ RHEL 系启用 firewalld 后，重启 Docker 可能报
+> `ZONE_CONFLICT: 'docker0' already bound to a zone` 而无法启动，
+> 处理方法见 [第 9 节故障速查](#9-部署故障速查实战记录)。
 ---
 
 ## 2. 获取代码与配置密钥
@@ -218,12 +222,13 @@ sudo docker compose logs -f backend   # 看到 Uvicorn running 即成功（Ctrl+
 ```bash
 cat /etc/resolv.conf          # 若首行是 127.0.0.53，需要下面这步
 sudo mkdir -p /etc/docker
-# 已有 daemon.json 的话先把原内容合并进来，不要直接覆盖
+# ⚠️ 若 daemon.json 已存在，先 cat 查看原内容，把 dns 合并进去，不要整文件覆盖
 sudo tee /etc/docker/daemon.json >/dev/null <<'EOF'
 {
   "dns": ["223.5.5.5", "119.29.29.29"]
 }
 EOF
+python3 -m json.tool /etc/docker/daemon.json    # 校验 JSON 合法
 sudo systemctl restart docker
 ```
 
@@ -535,3 +540,77 @@ journalctl -u nginx -n 50 --no-pager
 4. **首次登录立即改密**：初始账号是 `admin / admin123`。
 5. **定期检查磁盘**：镜像与备份会累积，`docker system df` 查看；定期 `docker image prune`。
 6. 单机部署下 MySQL 数据在 `mysql-data` 卷中，**重装/迁移前先备份**；迁移时用 `docker run --rm -v hex-auth_mysql-data:/data ...` 或直接 SQL 导出。
+
+---
+
+## 9. 部署故障速查（实战记录）
+
+以下是首次部署中真实遇到过的故障，按出现顺序排列。遇到报错先查这张表。
+
+### 9.1 命令/依赖缺失（最小化镜像常见）
+
+| 报错 | 处理 |
+| --- | --- |
+| `sudo: certbot：找不到命令` | RHEL 系先启用 EPEL：`dnf install -y epel-release && dnf install -y certbot`；装不上就用 5.1 的 acme.sh 备选 |
+| `bash: dig: 未找到命令` | 用系统自带的 `getent hosts auth.aaa.com`，或 `dnf install -y bind-utils` |
+| `sudo: git：找不到命令` | `dnf install -y git`（最小化镜像默认没有） |
+| `no configuration file provided: not found`（docker compose） | 不在项目目录，或部署脚手架还在未合并的分支上：`git checkout main && git pull`，确认 `ls docker-compose.yml` 存在 |
+
+### 9.2 构建期网络问题
+
+| 报错 | 原因与处理 |
+| --- | --- |
+| `Temporary failure in name resolution`（pip/npm） | 构建容器 DNS 解析失败：`/etc/resolv.conf` 指向 `127.0.0.53` 时，按第 3 节配置 `daemon.json` 的 `dns`，并在根 `.env` 启用 `PIP_INDEX_URL` / `NPM_REGISTRY` 镜像源 |
+| `dial tcp ...docker.io... connection refused / i/o timeout` | Docker Hub 被墙/污染：`daemon.json` 配 `registry-mirrors`（实测可用：`https://docker.m.daocloud.io`、`https://docker.1ms.run`，阿里云个人加速器在部分网络下不生效） |
+| `docker info` 有 Registry Mirrors，但 build 仍连 `registry-1.docker.io` | **BuildKit 不读取 `registry-mirrors`**。先 `docker pull` 预拉四个基础镜像，再用 `sudo env COMPOSE_DOCKER_CLI_BUILD=0 docker compose up -d --build` 走传统构建器 |
+| 构建前端时 `Killed`（退出码 137） | 内存不足，按 1.1 加 swap；或本地构建 `docker save` 上传 |
+
+### 9.3 Docker 守护进程启动失败
+
+报错特征：
+
+```
+failed to start daemon: Error initializing network controller:
+Failed to program NAT chain: ZONE_CONFLICT: 'docker0' already bound to a zone
+```
+
+原因：firewalld 与 Docker 争抢 `docker0` 网卡的 zone 归属。处理：
+
+```bash
+systemctl stop firewalld
+systemctl disable firewalld            # 云服务器对外防线是安全组，可禁用 firewalld
+ip link set docker0 down 2>/dev/null
+ip link delete docker0 2>/dev/null     # 删除残留网卡，Docker 启动时会重建
+systemctl reset-failed docker
+systemctl start docker
+systemctl status docker --no-pager | head -3   # 应为 active (running)
+```
+
+> 若必须保留 firewalld：`firewall-cmd --permanent --zone=docker --change-interface=docker0 && firewall-cmd --reload` 后再启动 Docker。
+> 修改 `daemon.json` 后 Docker 起不来时，先 `python3 -m json.tool /etc/docker/daemon.json` 校验 JSON，再检查是否覆盖掉了原有配置。
+
+### 9.4 数据库客户端连接（Navicat / DataGrip）
+
+完整流程见「日常运维 → 用数据库客户端连接」。高频错误：
+
+| 报错 | 层级 | 处理 |
+| --- | --- | --- |
+| `10061 connection refused` | TCP | MySQL 默认未映射端口，属正常；按运维章节开放 `127.0.0.1:3306` |
+| `Access denied for 'password'. Authentication that can continue: publickey,...,password (31)` | **SSH** | SSH 认证失败：用户名必须是 `root`（不是 hexauth、不是 password），密码是**服务器 root 密码**；`hexauth` 是 MySQL 账号，不是 Linux 用户 |
+| `Permission denied (publickey,gssapi-keyex,...)` | SSH | 密码错或 root 被禁止密码登录；不知道密码就在阿里云控制台「重置实例密码」并重启实例 |
+| `1045 - Access denied for user 'root'@'172.19.0.1' (using password: NO)` | **MySQL** | SSH 已通（能到达 172.19.0.1 网桥即证明）；常规页没填密码：用户名 `hexauth`、密码取根 `.env` 的 `MYSQL_PASSWORD` |
+| `1045 ... (using password: YES)` | MySQL | 密码发了但不对：核对 `MYSQL_PASSWORD`，注意复制别带行尾空格 |
+
+> 两套凭据千万别混：**SSH 页 = 服务器 root + 服务器密码；常规页 = hexauth + MYSQL_PASSWORD**。
+
+### 9.5 配置变更不生效
+
+- 改 `backend/.env` 后 `docker compose restart` **无效**：env_file 只在容器创建时读取，
+  必须 `docker compose up -d --force-recreate backend`
+- 服务器上 `git pull` 显示「已是最新」但文件是旧的：你停在已合并的功能分支上，
+  `git checkout main && git pull`；本地有改动先 `git stash` 或备份
+
+### 9.6 SSH 层防护
+
+多次密码输错后出现 `Connection timed out`：可能是 fail2ban/防爆破临时封禁，
+等待几分钟后重试；或用阿里云控制台 VNC 登录执行 `fail2ban-client set sshd unbanip <你的IP>`（如部署了 fail2ban）。
