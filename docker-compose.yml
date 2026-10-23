@@ -3,11 +3,17 @@
 # 适用：轻量级云服务器（1核2G 起）。MySQL 不对宿主机暴露端口，
 # 后端/前端只绑定 127.0.0.1，由宿主机 Nginx 统一反代并终止 TLS。
 #
-# 用法：
-#   cp .env.example .env && vi .env          # 设置数据库密码
-#   cp backend/.env.example backend/.env     # 设置 JWT_SECRET_KEY / RSA_MASTER_KEY
-#   docker compose up -d --build
-#   docker compose exec backend python create_admin.py
+# 前置文件（均不入库）：
+#   根 .env              MYSQL_ROOT_PASSWORD / MYSQL_PASSWORD / 构建源
+#   backend/.env         DATABASE_URL / JWT_SECRET_KEY / RSA_MASTER_KEY / 限流配置
+#
+# 常用命令：
+#   docker compose up -d --build                     首次部署（国内加 COMPOSE_DOCKER_CLI_BUILD=0）
+#   docker compose up -d --force-recreate backend     改 backend/.env 后生效
+#   docker compose exec backend python create_admin.py 建表 + 初始管理员
+#   docker compose logs -f --tail=100 backend         查看日志
+#
+# 完整说明与排错见 DEPLOY.md。
 
 services:
   mysql:
@@ -26,6 +32,13 @@ services:
       # 轻量服务器内存约束：缓冲池压到 128M（默认 128M 起，此处显式声明）
       - --innodb-buffer-pool-size=128M
       - --max-connections=50
+    # 默认不对宿主机暴露端口（安全设计），外部客户端直连会报 10061。
+    # 需要用 Navicat / DataGrip 等工具时，取消下面两行注释：
+    # 仅绑定回环地址，必须配合 SSH 隧道使用；用完建议重新注释。
+    #   ports:
+    #     - "127.0.0.1:3306:3306"
+    # 不要写成 "3306:3306" 或 "0.0.0.0:3306:3306"：数据库直接暴露公网会被持续扫描爆破。
+    # 连接参数：SSH 隧道 → root@服务器IP:22；数据库 → 127.0.0.1:3306 / hexauth / MYSQL_PASSWORD
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
@@ -34,6 +47,11 @@ services:
       timeout: 5s
       retries: 12
       start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - hex-auth
 
@@ -45,6 +63,8 @@ services:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     container_name: hex-auth-backend
     restart: always
+    # 环境变量仅在容器创建时注入：修改 backend/.env 后需
+    # docker compose up -d --force-recreate backend（restart 不生效）
     env_file: ./backend/.env
     environment:
       # 覆盖 backend/.env 中的 DATABASE_URL，指向容器网络内的 MySQL
@@ -52,11 +72,16 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-    # 限流器与离线检测是进程内实现，务必单 worker
+    # 限流器与离线检测是进程内实现，务必单 worker（多 worker 会使限流按进程数放大）
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
     ports:
       # 仅监听宿主机回环，供 Nginx 反代；不对公网开放
       - "127.0.0.1:8000:8000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - hex-auth
 
@@ -71,6 +96,11 @@ services:
       - backend
     ports:
       - "127.0.0.1:8080:80"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - hex-auth
 

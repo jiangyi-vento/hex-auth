@@ -456,8 +456,11 @@ gunzip -c /var/backups/hex-auth/hex_auth_2026-10-23_031700.sql.gz |   sudo docke
       ...
 ```
 
+`docker-compose.yml` 里已经预留了这两行（注释状态），取消注释即可：
+
 ```bash
 cd /opt/hex-auth
+sudo vi docker-compose.yml     # mysql 服务下：去掉 ports / - "127.0.0.1:3306:3306" 的注释
 sudo docker compose up -d mysql      # 重建 mysql 容器，数据卷不受影响
 ss -lntp | grep 3306                 # 应显示 127.0.0.1:3306
 ```
