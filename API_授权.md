@@ -11,10 +11,11 @@ hex-auth 是一个统一的在线授权中心，为多形态程序提供在线�
 | 项目 | 说明 |
 | --- | --- |
 | API 版本 | v1 |
-| 基础 URL | `http://your-server:8000/api/v1` |
-| 通信协议 | HTTP/HTTPS |
+| 基础 URL | 生产：`https://your-domain/api/v1`；本地开发：`http://localhost:8000/api/v1` |
+| 通信协议 | HTTP/HTTPS（生产环境必须 HTTPS） |
 | 请求方法 | POST |
 | 数据格式 | JSON |
+| 业务失败 | 业务失败（success=false）仍是 HTTP 200；仅限流(429)与参数校验失败(422)返回非 200，见 4.1 |
 
 ### 2.2 核心概念
 
@@ -45,9 +46,9 @@ hex-auth 是一个统一的在线授权中心，为多形态程序提供在线�
 
 | 参数名 | 类型 | 必需 | 说明 |
 | --- | --- | --- | --- |
-| license_key | string | 是 | 授权码 |
-| client_fp | string | 是 | 客户端指纹，建议使用硬件信息生成 |
-| client_type | string | 是 | 客户端类型，可选值：`gui`, `cli`, `service`, `plugin` |
+| license_key | string | 是 | 授权码，长度 10-50 |
+| client_fp | string | 是 | 客户端指纹，建议使用硬件信息哈希生成，长度 10-100 |
+| client_type | string | 是 | 客户端类型，可选值：`gui`, `cli`, `service`, `plugin`（长度 3-20） |
 
 **响应格式**:
 
@@ -89,6 +90,12 @@ hex-auth 是一个统一的在线授权中心，为多形态程序提供在线�
   "message": "Invalid license key"
 }
 ```
+
+**行为说明**:
+
+- 设备被管理员禁用后，无法通过重新激活自我解禁（返回 `Client has been disabled`），需联系管理员
+- 处于异常状态（长时间未心跳）的设备重新激活会自动恢复正常
+- 同一指纹重复激活不会占用新的设备名额
 
 ### 3.2 心跳 API
 
@@ -198,6 +205,36 @@ hex-auth 是一个统一的在线授权中心，为多形态程序提供在线�
 }
 ```
 
+### 3.4 令牌离线验签
+
+客户端可在本地验证令牌完整性，无需请求服务器。算法：对 `token` 部分
+按 **key 排序序列化为紧凑 JSON**，使用产品 **RSA 公钥**做 **SHA256 + PKCS#1 v1.5**
+签名验证（公钥可向管理员索取，或在管理后台产品详情中复制）。
+
+Python 验签示例：
+
+```python
+import base64, json, time
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+
+def verify_license_token(token: dict, public_key_pem: str) -> bool:
+    try:
+        payload = json.dumps(token["token"], sort_keys=True).encode("utf-8")
+        key = serialization.load_pem_public_key(public_key_pem.encode("utf-8"))
+        key.verify(
+            base64.b64decode(token["signature"]),
+            payload,
+            padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+        return token["token"]["exp"] > int(time.time())
+    except Exception:
+        return False
+```
+
+> 验签通过仅代表令牌未被篡改；吊销、禁用等实时状态仍以 `heartbeat` / `status` 接口为准。
+
 ## 4. 错误码说明
 
 | 错误消息 | 说明 |
@@ -208,11 +245,22 @@ hex-auth 是一个统一的在线授权中心，为多形态程序提供在线�
 | Product not found | 产品不存在 |
 | Product has been disabled | 产品已被禁用 |
 | Maximum number of devices reached | 已达到最大设备数限制 |
+| Invalid client type | 客户端类型不合法（仅激活接口） |
+| License not found | 授权不存在（心跳/状态接口，如授权已被删除） |
 | Invalid token format | 无效的令牌格式 |
 | Invalid token signature | 无效的令牌签名 |
 | Client not found | 客户端不存在 |
 | Client has been disabled | 客户端已被禁用 |
 | License is invalid | 授权无效 |
+
+### 4.1 非 200 响应（与业务失败格式不同）
+
+| HTTP 状态码 | 触发场景 | 响应格式 |
+| --- | --- | --- |
+| 429 | 同一 IP 触发限流：激活 10 次/分钟，心跳与状态 300 次/分钟 | `{"detail": "Too many requests, please retry later"}` |
+| 422 | 请求参数不满足校验（缺失字段、长度超限、类型错误） | `{"detail": [{"loc": [...], "msg": "..."}]}` |
+
+客户端实现时应区分三种情况：HTTP 非 200（限流/参数错误）、HTTP 200 且 `success=false`（业务失败）、HTTP 200 且 `success=true`。收到 429 时应退避重试而非立即重发。
 
 ## 5. 示例代码
 
@@ -363,8 +411,8 @@ main();
    - 避免明文存储授权令牌
 
 2. **合理设置心跳间隔**:
-   - 根据产品特性设置合理的心跳间隔，建议为 1-24 小时
-   - 避免过于频繁的心跳请求，减少服务器负担
+   - 使用激活响应返回的 `heartbeat_interval` 作为心跳间隔，不要自行硬编码
+   - 避免过于频繁的心跳请求：同 IP 心跳限流为 300 次/分钟
 
 3. **处理授权异常**:
    - 实现完善的错误处理机制，处理各种授权失败情况
@@ -377,7 +425,7 @@ main();
 ### 6.2 服务器部署建议
 
 1. **使用 HTTPS**:
-   - 生产环境建议使用 HTTPS 协议，保护 API 通信安全
+   - 生产环境必须使用 HTTPS 协议，保护 API 通信安全
 
 2. **配置防火墙**:
    - 限制 API 访问 IP，防止恶意请求
@@ -420,6 +468,6 @@ main();
 
 ---
 
-**文档版本**: 1.0
-**更新日期**: 2026-01-03
-**适用版本**: hex-auth v1.0
+**文档版本**: 1.1
+**更新日期**: 2026-10-24
+**适用版本**: hex-auth v1.x
