@@ -371,6 +371,36 @@ sudo docker compose ps
 
 ## 7. 日常运维
 
+### 修改配置后如何生效
+
+`env_file` 只在**创建容器时**读取一次，`docker compose restart` 不会重新注入环境变量。
+按改动内容选择方式：
+
+| 改动 | 生效方式 |
+| --- | --- |
+| `backend/.env`（JWT、RSA_MASTER_KEY、限流、CORS、DATABASE_URL） | `sudo docker compose up -d --force-recreate backend` |
+| 根 `.env` 的 `PIP_INDEX_URL` / `NPM_REGISTRY` | 只影响构建：`sudo docker compose build backend frontend && sudo docker compose up -d` |
+| 根 `.env` 的 `MYSQL_*` | 仅首次初始化建库时生效，见下方说明 |
+| `docker-compose.yml` 本身 | `sudo docker compose up -d`（compose 会自动检测并重建） |
+
+验证变量是否真的进了容器：
+
+```bash
+sudo docker compose exec backend env | grep -E "JWT_|RSA_|DATABASE_URL|RATE_LIMIT"
+sudo docker compose config | head -40     # 查看插值后的最终配置
+```
+
+两个高危操作：
+
+- **改 `RSA_MASTER_KEY`**：数据库中已加密的产品私钥将全部无法解密（旧密钥才能解开旧密文）。
+  确需更换时必须先用旧密钥解密、再用新密钥重新加密全部产品，否则不要动。
+- **改 `MYSQL_PASSWORD`**：只改 `.env` 不会修改 MySQL 里已存在的用户密码，后端会直接连不上。
+  正确做法是先进数据库改密码，再同步 `.env`：
+  ```bash
+  sudo docker compose exec mysql mysql -uroot -p -e     "ALTER USER 'hexauth'@'%' IDENTIFIED BY '<新密码>'; FLUSH PRIVILEGES;"
+  # 然后更新 backend/.env 的 DATABASE_URL 里对应密码，再 --force-recreate backend
+  ```
+
 ### 更新版本
 
 ```bash
