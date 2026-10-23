@@ -434,6 +434,47 @@ gunzip -c /var/backups/hex-auth/hex_auth_2026-10-23_031700.sql.gz |   sudo docke
 
 > 非 Docker（原生）部署请用 `scripts/backup.sh`，它从 `backend/.env` 读取连接信息。
 
+### 用数据库客户端连接（Navicat / DataGrip / DBeaver）
+
+默认 MySQL **不映射任何宿主机端口**（安全设计），从本机直连会报
+`10061 connection refused`，这是正常的。
+
+**推荐：SSH 隧道 + 仅本机端口映射**
+
+1. 在服务器上临时把 3306 发布到回环地址（只监听 127.0.0.1，公网仍不可达）：
+
+   ```bash
+   cd /opt/hex-auth
+   # 在 docker-compose.yml 的 mysql 服务下增加 ports 段：
+   #   ports:
+   #     - "127.0.0.1:3306:3306"
+   sudo docker compose up -d mysql      # 会重建 mysql 容器，数据卷不受影响
+   ss -lntp | grep 3306                 # 应显示 127.0.0.1:3306
+   ```
+
+2. 客户端配置（以 Navicat 为例）：
+
+   | 配置页 | 值 |
+   | --- | --- |
+   | SSH 隧道 | 主机=服务器公网IP，端口=22，用户=root，认证=密码/私钥 |
+   | 常规 | 主机=`127.0.0.1`，端口=`3306`，用户=`hexauth` |
+   | 数据库 | `hex_auth` |
+
+   DataGrip/DBeaver 同理：先启用 SSH tunnel，数据库主机填 `127.0.0.1`。
+
+3. 用完想恢复严格隔离，删掉 `ports` 段后 `docker compose up -d mysql` 即可。
+
+**不开放端口的方式（只做临时查询）**
+
+```bash
+sudo docker compose exec mysql mysql -uhexauth -p hex_auth
+# 或直接跑单条 SQL
+sudo docker compose exec -T mysql sh -c 'exec mysql -uhexauth -p"$MYSQL_PASSWORD" hex_auth -e "SHOW TABLES;"'
+```
+
+> ⚠️ 不要把 3306 映射成 `0.0.0.0:3306`。一旦暴露公网，MySQL 会持续被暴力破解扫描。
+> 必须直连时，也要配合安全组只放行你自己的出口 IP。
+
 ### 日志与资源
 
 ```bash
