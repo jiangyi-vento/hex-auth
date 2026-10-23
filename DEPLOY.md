@@ -67,7 +67,7 @@ sudo systemctl enable --now docker
 docker compose version
 
 sudo apt update
-sudo apt install -y nginx certbot
+sudo apt install -y nginx certbot git
 sudo systemctl enable --now nginx
 ```
 
@@ -79,8 +79,8 @@ curl -fsSL https://get.docker.com | sh
 sudo systemctl enable --now docker
 docker compose version
 
-# Nginx（CentOS 7 用 yum，8+ 用 dnf）
-sudo dnf install -y nginx || sudo yum install -y nginx
+# Git 与 Nginx（最小化镜像默认都没有；CentOS 7 用 yum，8+ 用 dnf）
+sudo dnf install -y git nginx || sudo yum install -y git nginx
 sudo systemctl enable --now nginx
 
 # Certbot 位于 EPEL 源，必须先启用 EPEL
@@ -128,6 +128,16 @@ sudo mkdir -p /opt && cd /opt
 sudo git clone https://github.com/jiangyi-vento/hex-auth.git
 cd hex-auth
 ```
+
+> 国内服务器拉取 GitHub 可能超时。兜底：在本地打包后上传
+> ```bash
+> # 开发机（项目根目录）
+> git archive --format=tar.gz --prefix=hex-auth/ -o hex-auth.tar.gz HEAD
+> scp hex-auth.tar.gz root@<服务器IP>:/opt/
+> # 服务器
+> cd /opt && tar xzf hex-auth.tar.gz
+> ```
+> 之后更新版本可用 `scp` 增量覆盖，或给服务器配好代理再 `git pull`。
 
 ### 2.1 生成两个密钥
 
