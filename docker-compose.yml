@@ -1,0 +1,75 @@
+# hex-auth 生产部署（Docker Compose）
+#
+# 适用：轻量级云服务器（1核2G 起）。MySQL 不对宿主机暴露端口，
+# 后端/前端只绑定 127.0.0.1，由宿主机 Nginx 统一反代并终止 TLS。
+#
+# 用法：
+#   cp .env.example .env && vi .env          # 设置数据库密码
+#   cp backend/.env.example backend/.env     # 设置 JWT_SECRET_KEY / RSA_MASTER_KEY
+#   docker compose up -d --build
+#   docker compose exec backend python create_admin.py
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: hex-auth-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: hex_auth
+      MYSQL_USER: hexauth
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      # 轻量服务器内存约束：缓冲池压到 128M（默认 128M 起，此处显式声明）
+      - --innodb-buffer-pool-size=128M
+      - --max-connections=50
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    networks:
+      - hex-auth
+
+  backend:
+    build: ./backend
+    container_name: hex-auth-backend
+    restart: always
+    env_file: ./backend/.env
+    environment:
+      # 覆盖 backend/.env 中的 DATABASE_URL，指向容器网络内的 MySQL
+      DATABASE_URL: mysql+pymysql://hexauth:${MYSQL_PASSWORD}@mysql:3306/hex_auth?charset=utf8mb4
+    depends_on:
+      mysql:
+        condition: service_healthy
+    # 限流器与离线检测是进程内实现，务必单 worker
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+    ports:
+      # 仅监听宿主机回环，供 Nginx 反代；不对公网开放
+      - "127.0.0.1:8000:8000"
+    networks:
+      - hex-auth
+
+  frontend:
+    build: ./frontend
+    container_name: hex-auth-frontend
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:8080:80"
+    networks:
+      - hex-auth
+
+volumes:
+  mysql-data:
+
+networks:
+  hex-auth:
+    driver: bridge
