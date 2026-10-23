@@ -1,21 +1,15 @@
-# 后端Dockerfile示例
 FROM python:3.12
 
-# 设置工作目录
+# 构建期 pip 源，可通过 docker compose build args 覆盖（国内建议用镜像源）
+ARG PIP_INDEX_URL=https://pypi.org/simple
+
 WORKDIR /app
 
-# 安装依赖
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" -r requirements.txt
 
-# 复制应用代码
 COPY . .
 
-# 创建密钥目录（如果需要的话）
-RUN mkdir -p /app/keys
-
-# 暴露端口
 EXPOSE 8000
 
-# 启动应用
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

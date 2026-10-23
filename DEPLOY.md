@@ -208,6 +208,38 @@ sudo docker compose ps          # mysql 应为 healthy，其余为 running
 sudo docker compose logs -f backend   # 看到 Uvicorn running 即成功（Ctrl+C 退出日志）
 ```
 
+#### 构建时 pip / npm 报 DNS 解析失败（国内服务器常见）
+
+现象：`Temporary failure in name resolution`、`No matching distribution found`、
+`npm ERR! network`。宿主能拉镜像但构建容器解析不了域名，按两步处理。
+
+**① 给 Docker 配 DNS**（宿主 `/etc/resolv.conf` 指向 `127.0.0.53` 时容器必然失败）
+
+```bash
+cat /etc/resolv.conf          # 若首行是 127.0.0.53，需要下面这步
+sudo mkdir -p /etc/docker
+# 已有 daemon.json 的话先把原内容合并进来，不要直接覆盖
+sudo tee /etc/docker/daemon.json >/dev/null <<'EOF'
+{
+  "dns": ["223.5.5.5", "119.29.29.29"]
+}
+EOF
+sudo systemctl restart docker
+```
+
+**② 在根 `.env` 启用国内镜像源后重建**
+
+```bash
+cat >> /opt/hex-auth/.env <<'EOF'
+PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+NPM_REGISTRY=https://registry.npmmirror.com
+EOF
+
+cd /opt/hex-auth
+sudo docker compose build backend frontend
+sudo docker compose up -d
+```
+
 内存吃紧时的替代方案（本地构建后传到服务器）：
 
 ```bash
