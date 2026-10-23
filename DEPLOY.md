@@ -240,6 +240,32 @@ sudo docker compose build backend frontend
 sudo docker compose up -d
 ```
 
+**③ BuildKit 无视 `registry-mirrors`（实测高频）**
+
+现象：`docker info` 里 Registry Mirrors 已生效，`docker pull` 也正常，但
+`docker compose build` 仍报：
+
+```
+failed to resolve source metadata ... registry-1.docker.io: i/o timeout
+```
+
+原因：BuildKit（buildx）有自己的镜像解析器，不读取 `daemon.json` 的 mirrors。
+处理：先逐个预拉基础镜像，再临时改用传统构建器：
+
+```bash
+docker pull python:3.12
+docker pull node:20
+docker pull nginx:alpine
+docker pull mysql:8.0
+
+cd /opt/hex-auth
+sudo env COMPOSE_DOCKER_CLI_BUILD=0 docker compose up -d --build
+```
+
+> 实测可用的公共镜像源（阿里云个人加速器在部分网络下不生效时）：
+> `https://docker.m.daocloud.io`、`https://docker.1ms.run`。
+> 这两个源只加速 Docker Hub 镜像，pip/npm 仍需 ② 里的源。
+
 内存吃紧时的替代方案（本地构建后传到服务器）：
 
 ```bash
