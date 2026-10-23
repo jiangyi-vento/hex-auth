@@ -50,21 +50,46 @@ free -h    # 确认 Swap 已生效
 
 ### 1.2 安装 Docker 与 Nginx
 
-```bash
-# Docker
-curl -fsSL https://get.docker.com | sudo sh
-sudo systemctl enable --now docker
+先确认发行版：`cat /etc/os-release`。
 
-# Docker Compose 插件随 Docker 一起安装，验证：
+**Ubuntu / Debian：**
+
+```bash
+curl -fsSL https://get.docker.com | sh
+sudo systemctl enable --now docker
 docker compose version
 
-# Nginx + Certbot
 sudo apt update
 sudo apt install -y nginx certbot
 sudo systemctl enable --now nginx
 ```
 
-### 1.3 防火墙
+**CentOS / Rocky / Alma / 阿里云 Linux 3（RHEL 系）：**
+
+```bash
+# Docker（get.docker.com 同时支持 RHEL 系）
+curl -fsSL https://get.docker.com | sh
+sudo systemctl enable --now docker
+docker compose version
+
+# Nginx（CentOS 7 用 yum，8+ 用 dnf）
+sudo dnf install -y nginx || sudo yum install -y nginx
+sudo systemctl enable --now nginx
+
+# Certbot 位于 EPEL 源，必须先启用 EPEL
+sudo dnf install -y epel-release || sudo yum install -y epel-release
+sudo dnf install -y certbot || sudo yum install -y certbot
+certbot --version
+```
+
+> 若 EPEL 源不可用（精简镜像、CentOS 7 已 EOL 等），改用 **acme.sh**（纯脚本、零依赖、自带续期），
+> 签发方式见 5.1 的备选方案。
+
+> 阿里云/腾讯云服务器还需要在**控制台安全组**放行 80、443（以及 22），
+> 否则证书 HTTP 验证会失败，表现为 `Timeout during connect`。
+### 1.3 防火墙与安全组
+
+**Ubuntu / Debian（ufw）：**
 
 ```bash
 sudo ufw allow 22/tcp
@@ -74,9 +99,19 @@ sudo ufw enable
 sudo ufw status
 ```
 
-> **不要**放开 8000 / 8080 / 3306。后两个已绑定在 127.0.0.1，3306 完全没暴露；
-> 若 8000 直连公网，客户端可伪造 `X-Real-IP` 绕过限流并污染审计日志。
+**CentOS / RHEL 系（firewalld）：**
 
+```bash
+sudo systemctl enable --now firewalld
+sudo firewall-cmd --permanent --add-service=ssh
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
+sudo firewall-cmd --list-services
+```
+
+**云厂商安全组**：阿里云/腾讯云/华为云需在控制台的安全组入方向规则中放行
+`22`、`80`、`443`。这一层独立于服务器内的 firewalld/ufw，只开其中一个不够。
 ---
 
 ## 2. 获取代码与配置密钥
@@ -197,6 +232,16 @@ sudo nginx -t && sudo systemctl reload nginx
 sudo certbot certonly --standalone -d auth.aaa.com
 # 证书生成在 /etc/letsencrypt/live/auth.aaa.com/
 ```
+**备选：acme.sh（无 root 包管理器依赖）**
+
+```bash
+curl https://get.acme.sh | sh -s email=you@example.com
+~/.acme.sh/acme.sh --issue --standalone -d auth.aaa.com
+
+# 安装到与 Nginx 配置相同的路径（续期后自动 reload）
+sudo mkdir -p /etc/letsencrypt/live/auth.aaa.com
+sudo ~/.acme.sh/acme.sh --install-cert -d auth.aaa.com   --key-file       /etc/letsencrypt/live/auth.aaa.com/privkey.pem   --fullchain-file /etc/letsencrypt/live/auth.aaa.com/fullchain.pem   --reloadcmd      "systemctl reload nginx"
+```
 
 ### 5.2 启用站点配置
 
@@ -212,8 +257,12 @@ sudo systemctl reload nginx
 ### 5.3 确认自动续期
 
 ```bash
+# certbot 方式
 sudo systemctl list-timers | grep certbot    # 应有 certbot.timer
 sudo certbot renew --dry-run
+
+# acme.sh 方式（自带 crontab 任务，无需额外配置）
+crontab -l | grep acme
 ```
 
 ---
