@@ -301,6 +301,21 @@ sudo docker compose exec backend python create_admin.py
 
 ## 5. 配置 Nginx 与 HTTPS
 
+> **方案 B（服务器已有宝塔面板）**：跳过本节的 certbot 流程，走宝塔面板：
+> 网站 → 添加站点（域名 `auth.aaa.com`，**纯静态**）→ 站点 SSL → Let's Encrypt
+> 一键申请并开「强制 HTTPS」（宝塔自动续期，无需 5.1 的 standalone）。
+> 然后编辑站点配置文件：
+> 1. **删除**默认的 `location ~ .*\.(gif|jpg|jpeg|png|bmp|swf)$` 与
+>    `location ~ .*\.(js|css)?$` 两个静态缓存 location——否则 JS/CSS 请求被截去
+>    站点根目录，前端全部 404（这是宝塔下最容易踩的坑）
+> 2. 加入三个反代 location（`/admin/` 与 `/api/` → `127.0.0.1:8000`，
+>    `/` → `127.0.0.1:8080`），**每段都必须带**
+>    `proxy_set_header X-Real-IP $remote_addr;`（限流与审计依赖真实 IP）
+> 3. **保留** `root` 行与 `location ~ \.well-known`（证书续期文件验证依赖）
+> 4. 完整的 location 片段与验收命令见 `deploy/nginx/auth.aaa.com.conf` 与第 6 节
+>
+> 以下为裸 Nginx 的标准流程。
+
 ### 5.1 先签证书（此时 80 端口空闲）
 
 ```bash
