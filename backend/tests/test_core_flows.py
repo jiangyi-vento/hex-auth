@@ -503,6 +503,20 @@ def test_private_key_encrypted_on_create():
     assert created.public_key.startswith("-----BEGIN PUBLIC KEY-----")
 
 
+def test_encrypted_private_key_exceeds_old_varchar2000():
+    """回归：加密后的私钥长度超过 2000 字符——
+
+    生产 MySQL 曾因列宽 VARCHAR(2000) 报 Data too long (1406)。
+    SQLite 不校验 VARCHAR 长度所以本地测试未发现；products.private_key
+    因此必须保持 TEXT。此断言用于防止列宽被改回小尺寸时无人察觉。
+    """
+    plaintext, _ = generate_rsa_key_pair()
+    stored = encrypt_private_key(plaintext)
+    assert len(stored) > 2000          # 旧列宽必然溢出
+    assert len(stored) <= 65535        # TEXT 容量内
+    assert decrypt_private_key(stored) == plaintext
+
+
 def test_activate_works_with_encrypted_key():
     """加密存储的私钥可以正常签发令牌，且令牌可用公钥验证"""
     db = make_db()
