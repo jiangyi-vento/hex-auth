@@ -155,7 +155,8 @@ hex-auth/
 
 ## 部署
 
-hex-auth支持两种主要部署方式，根据您的环境和需求选择合适的方案：
+> 推荐直接按 **[DEPLOY.md](DEPLOY.md)** 使用 Docker Compose 部署（含 `auth.aaa.com`
+> 的域名、HTTPS、备份与验收清单）。以下为手工部署方案，供参考。
 
 ### 部署方式1：前后端Docker部署（连接已有的MySQL和Nginx）
 
