@@ -26,8 +26,15 @@
 验证解析生效：
 
 ```bash
-dig +short auth.aaa.com      # 应返回你的服务器公网 IP
+# 无需安装任何工具（glibc 自带）
+getent hosts auth.aaa.com
+
+# 或
+ping -c 1 auth.aaa.com
 ```
+
+> 想用 `dig` 的话先装 bind-utils：`sudo dnf install -y bind-utils`（CentOS 7 用 `yum`）。
+> 只要返回的是你的服务器公网 IP 即可；解析未生效时 `getent` 无输出，需回域名控制台检查 A 记录。
 
 ---
 
