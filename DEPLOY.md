@@ -651,3 +651,57 @@ docker compose up -d --build backend    # 同步模型代码，新库建表才�
 > 经验：任何涉及「入库内容形态改变」（如加密、压缩、序列化方式变更）的改动，
 > 都要检查目标列容量并写一条对应的 `backend/sql/*.sql` 升级脚本；
 > 仅在 SQLite 上跑的测试无法发现列宽类问题。
+
+---
+
+## 10. 附录：Compose 命令速查
+
+以下命令均在 `/opt/hex-auth` 目录下执行；`backend` 可替换为 `mysql` / `frontend`。
+
+### 生命周期
+
+| 命令 | 说明 |
+| --- | --- |
+| `docker compose ps` | 容器状态（mysql 应为 `Up (healthy)`） |
+| `docker compose up -d` | 后台启动/更新全部（改了 compose.yml 用这条即可） |
+| `docker compose up -d backend` | 只更新单个服务 |
+| `docker compose stop` / `start` | 停止 / 启动（容器与数据保留） |
+| `docker compose restart backend` | 重启进程（**不会**重读 .env / 不用新镜像） |
+| `docker compose down` | 停止并删除容器与网络（**数据卷保留**） |
+| `docker compose down -v` | ⚠️ 连数据卷一起删——MySQL 数据全丢，慎用 |
+
+### 改动生效（核心区别）
+
+| 改了什么 | 生效方式 |
+| --- | --- |
+| 代码 / Dockerfile | `docker compose build backend && docker compose up -d backend` |
+| `backend/.env` | `docker compose up -d --force-recreate backend` |
+| `docker-compose.yml` | `docker compose up -d` |
+| 根 `.env`（构建源） | `docker compose build ...`（构建参数只在 build 时读取） |
+
+### 排错三步
+
+| 命令 | 用途 |
+| --- | --- |
+| `docker compose logs -f --tail=100 backend` | 跟踪日志（Ctrl+C 退出） |
+| `docker compose exec backend sh` | 进入容器现场（`exit` 退出） |
+| `docker compose config` | 渲染最终配置（.env 已替换），改 YAML 后先跑它校验 |
+| `docker compose exec backend env \| grep RSA_` | 查容器内实际环境变量 |
+
+### 磁盘与资源
+
+| 命令 | 用途 |
+| --- | --- |
+| `docker stats --no-stream` | 各容器 CPU/内存占用 |
+| `docker system df` | 镜像/容器/卷占用磁盘总量 |
+| `docker image prune -f` | 清理无标签的悬空镜像（构建残留） |
+
+### 本项目专属
+
+| 场景 | 命令 |
+| --- | --- |
+| 建表 + 初始管理员 | `docker compose exec backend python create_admin.py` |
+| 手动备份数据库 | `./deploy/backup-docker.sh /var/backups/hex-auth 14` |
+| MySQL 命令行 | `docker compose exec mysql mysql -uhexauth -p hex_auth` |
+| 服务器上的构建命令 | 加前缀 `sudo env COMPOSE_DOCKER_CLI_BUILD=0`（BuildKit 不走镜像加速器，见 9.2） |
+| backend 固定 `--workers 1` | 限流器为进程内实现，勿改多 worker（见 §8） |
