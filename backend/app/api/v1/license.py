@@ -116,7 +116,7 @@ def activate(
     if existing_client:
         # 异常状态的客户端恢复为正常
         existing_client.status = ClientStatus.NORMAL
-        existing_client.last_heartbeat = datetime.utcnow()
+        existing_client.last_heartbeat = datetime.now()
         existing_client.ip_address = get_client_ip(request)
     else:
         # 7. 创建新客户端
@@ -127,13 +127,13 @@ def activate(
             client_type=client_type,
             ip_address=get_client_ip(request),
             # 激活即首次联络：没有这个初值，从未心跳的设备会一直显示在线
-            last_heartbeat=datetime.utcnow(),
+            last_heartbeat=datetime.now(),
             status=ClientStatus.NORMAL
         )
         db.add(client)
 
-    # 8. 更新License状态为已激活
-    if license.status == LicenseStatus.UNACTIVATED:
+    # 8. 更新License状态为已激活（管理员续期后的过期授权一并恢复）
+    if license.status in (LicenseStatus.UNACTIVATED, LicenseStatus.EXPIRED):
         license.status = LicenseStatus.ACTIVATED
 
     db.commit()
@@ -235,7 +235,7 @@ def heartbeat(
             )
         
         # 7. 更新心跳时间与来源IP
-        client.last_heartbeat = datetime.utcnow()
+        client.last_heartbeat = datetime.now()
         client.ip_address = get_client_ip(request)
         db.commit()
         

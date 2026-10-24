@@ -122,6 +122,9 @@ def update_license(
     if "expire_at" in update_data:
         if license.expire_at < date.today():
             license.status = LicenseStatus.EXPIRED
+        elif license.status == LicenseStatus.EXPIRED:
+            # 已过期授权续期到未来日期时恢复正常，否则激活成功但心跳永远被拒
+            license.status = LicenseStatus.ACTIVATED
     
     db.commit()
     db.refresh(license)

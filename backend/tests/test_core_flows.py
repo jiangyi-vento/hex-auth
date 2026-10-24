@@ -47,6 +47,9 @@ from app.admin import auth as admin_auth
 from app.admin import client as admin_client
 from app.admin import product as admin_product
 from app.utils.audit_utils import create_audit_log
+from app.utils.request import get_client_ip
+from app.admin import license as admin_license
+from app.schemas.license import LicenseUpdate
 from app.core.offline_monitor import mark_offline_clients
 
 # 测试专用的自增IP，保证各测试间限流计数互不干扰
@@ -672,7 +675,7 @@ def test_activated_but_never_heartbeat_client_marked_offline():
     assert client.last_heartbeat is not None
 
     # 模拟长时间无心跳后，离线检测能将其标记为 ABNORMAL
-    client.last_heartbeat = datetime.utcnow() - timedelta(hours=8)
+    client.last_heartbeat = datetime.now() - timedelta(hours=8)
     db.commit()
     assert mark_offline_clients(db) == 1
     db.refresh(client)
@@ -684,7 +687,7 @@ def test_offline_monitor_marks_stale_clients():
     db = make_db()
     product, license = make_fixtures(db)  # 心跳间隔 3600，默认3倍阈值 = 10800秒
 
-    now = datetime.utcnow()
+    now = datetime.now()
     db.add_all([
         # 离线设备：4小时未心跳
         Client(license_id=license.id, product_code=license.product_code,
@@ -717,7 +720,7 @@ def test_offline_monitor_recovers_via_reactivation():
     db = make_db()
     product, license = make_fixtures(db)
 
-    now = datetime.utcnow()
+    now = datetime.now()
     client = Client(license_id=license.id, product_code=license.product_code,
                     client_fp="FP-RECOVER-01", client_type=ClientType.GUI,
                     ip_address="10.1.0.9", last_heartbeat=now - timedelta(hours=8),
@@ -736,6 +739,87 @@ def test_offline_monitor_recovers_via_reactivation():
     assert resp.success is True
     db.refresh(client)
     assert client.status == ClientStatus.NORMAL
+
+
+# ---------- 过期授权续期（状态机回归） ----------
+
+def test_renewing_expired_license_resets_status():
+    """管理员延长过期授权的有效期后，状态从 EXPIRED 恢复为 ACTIVATED"""
+    db = make_db()
+    _, license = make_fixtures(db)
+    license.expire_at = date.today() - timedelta(days=1)
+    license.status = LicenseStatus.EXPIRED
+    db.commit()
+
+    admin_license.update_license(
+        license_id=license.id,
+        license_update=LicenseUpdate(expire_at=date.today() + timedelta(days=30)),
+        db=db,
+        current_admin=AdminUser(username="x", password_hash="x", status=AdminStatus.ENABLED),
+    )
+
+    db.refresh(license)
+    assert license.expire_at > date.today()
+    assert license.status == LicenseStatus.ACTIVATED
+
+
+def test_renewed_license_activation_and_heartbeat_work():
+    """回归：续期后的过期授权，激活与心跳全链路可用
+
+    修复前：activate 放行 EXPIRED 状态的续期授权并签发令牌，
+    但 heartbeat 见 EXPIRED 即拒绝，形成「激活成功、心跳永远失败」的死锁。
+    """
+    db = make_db()
+    product, license = make_fixtures(db)
+    plain_key = product.private_key  # 激活会把明文私钥升级为密文，先留存
+    license.expire_at = date.today() - timedelta(days=1)
+    license.status = LicenseStatus.EXPIRED
+    db.commit()
+
+    admin_license.update_license(
+        license_id=license.id,
+        license_update=LicenseUpdate(expire_at=date.today() + timedelta(days=30)),
+        db=db,
+        current_admin=AdminUser(username="x", password_hash="x", status=AdminStatus.ENABLED),
+    )
+
+    resp = activate(fake_request(), ActivateRequest(
+        license_key=license.license_key, client_fp="FP-RENEW-01", client_type="gui",
+    ), db)
+    assert resp.success is True
+    db.refresh(license)
+    assert license.status == LicenseStatus.ACTIVATED
+
+    token = generate_license_token(
+        product=product.product_code, license_key=license.license_key,
+        client_fp="FP-RENEW-01", expire_at=9999999999, private_key=plain_key,
+    )
+    hb = heartbeat(fake_request(), HeartbeatRequest(token=token), db)
+    assert hb.success is True
+
+
+# ---------- 客户端IP候选值校验（1406 同族回归） ----------
+
+def test_get_client_ip_validates_and_bounds():
+    """伪造的超长/非法 IP 头不会进入 ip_address 列（列宽 String(50)）"""
+    def req_with_headers(headers):
+        return HttpRequest({
+            "type": "http",
+            "client": ("203.0.113.9", 12345),
+            "headers": [(k.lower().encode(), v.encode()) for k, v in headers],
+        })
+
+    evil = "x" * 300
+    # 合法 X-Real-IP 优先
+    assert get_client_ip(req_with_headers([("X-Real-IP", "198.51.100.5")])) == "198.51.100.5"
+    # 非法 X-Real-IP → 回退 XFF 首个合法候选
+    assert get_client_ip(req_with_headers([
+        ("X-Real-IP", evil), ("X-Forwarded-For", "198.51.100.6, 10.0.0.1"),
+    ])) == "198.51.100.6"
+    # 全部非法 → 回退直连地址，绝不返回超长值
+    ip = get_client_ip(req_with_headers([("X-Real-IP", evil), ("X-Forwarded-For", evil)]))
+    assert ip == "203.0.113.9"
+    assert len(ip) <= 45
 
 
 if __name__ == "__main__":

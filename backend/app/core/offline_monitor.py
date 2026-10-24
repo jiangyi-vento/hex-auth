@@ -24,7 +24,8 @@ _DEFAULT_INTERVAL = 3600
 
 def mark_offline_clients(db: Session) -> int:
     """扫描并标记离线客户端，返回本次标记数量。session 由调用方提供（便于测试）。"""
-    now = datetime.utcnow()
+    # 与 last_heartbeat 的写入口径一致（容器 TZ=Asia/Shanghai，见 compose）
+    now = datetime.now()
     thresholds = {
         code: timedelta(seconds=(interval or _DEFAULT_INTERVAL) * settings.CLIENT_OFFLINE_MULTIPLIER)
         for code, interval in db.query(Product.product_code, Product.heartbeat_interval).all()
