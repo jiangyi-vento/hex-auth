@@ -555,6 +555,9 @@ journalctl -u nginx -n 50 --no-pager
 4. **首次登录立即改密**：初始账号是 `admin / admin123`。
 5. **定期检查磁盘**：镜像与备份会累积，`docker system df` 查看；定期 `docker image prune`。
 6. 单机部署下 MySQL 数据在 `mysql-data` 卷中，**重装/迁移前先备份**；迁移时用 `docker run --rm -v hex-auth_mysql-data:/data ...` 或直接 SQL 导出。
+7. **时间口径依赖容器时区**：compose 为 backend 与 mysql 统一设置 `TZ=Asia/Shanghai`，
+   数据库 `created_at` 与后端写入的 `last_heartbeat`/`last_login` 均为北京时间（无时区后缀），
+   前端按本地时间解析即可正确显示。修改 TZ 时必须三者同步，否则时间显示与离线判定会错位。
 
 ---
 

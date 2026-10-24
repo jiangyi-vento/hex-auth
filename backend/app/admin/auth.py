@@ -114,8 +114,8 @@ def login(
     rate_limiter.reset(failure_key)
 
     # 更新登录时间
-    from datetime import datetime, timezone
-    admin.last_login = datetime.now(timezone.utc)
+    from datetime import datetime
+    admin.last_login = datetime.now()
     db.commit()
     
     # 记录登录审计日志
