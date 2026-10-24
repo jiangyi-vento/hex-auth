@@ -68,6 +68,10 @@
             </td>
             <td>{{ formatDate(product.created_at) }}</td>
             <td class="action-buttons">
+              <button class="key-btn" @click="openPubKeyModal(product)">
+                <Icon :icon="icons.licenses" />
+                公钥
+              </button>
               <button class="edit-btn" @click="openEditModal(product)">
                 <Icon :icon="icons.edit" />
                 编辑
@@ -213,6 +217,26 @@
         </form>
       </div>
     </div>
+
+    <!-- 公钥查看模态框 -->
+    <div v-if="showPubKeyModal" class="modal-overlay" @click="showPubKeyModal = false">
+      <div class="modal" @click.stop>
+        <div class="modal-header">
+          <h3>产品公钥</h3>
+          <button class="close-btn" @click="showPubKeyModal = false">×</button>
+        </div>
+        <div class="pubkey-body">
+          <p class="pubkey-meta">
+            {{ pubKeyProduct?.product_code }} · 随客户端分发，用于令牌离线验签（见 API_授权.md 3.4）
+          </p>
+          <pre class="pubkey-pre">{{ pubKeyProduct?.public_key }}</pre>
+          <div class="form-actions">
+            <button type="button" class="cancel-btn" @click="showPubKeyModal = false">关闭</button>
+            <button type="button" class="confirm-btn" @click="copyPublicKey">复制公钥</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -235,6 +259,33 @@ const showCreateModal = ref(false)
 
 // 编辑模态框状态
 const showEditModal = ref(false)
+
+// 公钥查看模态框状态
+const showPubKeyModal = ref(false)
+const pubKeyProduct = ref<any>(null)
+
+const openPubKeyModal = (product: any) => {
+  pubKeyProduct.value = product
+  showPubKeyModal.value = true
+}
+
+const copyPublicKey = async () => {
+  if (!pubKeyProduct.value) return
+  const text = pubKeyProduct.value.public_key
+  try {
+    await navigator.clipboard.writeText(text)
+    Message.success('公钥已复制到剪贴板')
+  } catch {
+    // 非安全上下文或权限被拒时的兜底方案
+    const ta = document.createElement('textarea')
+    ta.value = text
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+    Message.success('公钥已复制到剪贴板')
+  }
+}
 
 // 搜索和筛选
 const searchText = ref('')
@@ -624,6 +675,31 @@ onMounted(() => {
   gap: 8px;
 }
 
+.key-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  background-color: #fff;
+  color: #475569;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.key-btn:hover {
+  background-color: #f6f7f9;
+  color: #111827;
+}
+
+.key-btn :deep(svg) {
+  width: 14px;
+  height: 14px;
+}
+
 .edit-btn,
 .delete-btn {
   display: flex;
@@ -776,6 +852,31 @@ onMounted(() => {
 }
 
 /* 模态框样式 */
+.pubkey-body {
+  padding: 0 20px 20px;
+}
+
+.pubkey-meta {
+  font-size: 13px;
+  color: #64748b;
+  margin: 0 0 12px;
+}
+
+.pubkey-pre {
+  background-color: #0f172a;
+  color: #e2e8f0;
+  padding: 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow-y: auto;
+  margin: 0 0 16px;
+  font-family: 'Courier New', monospace;
+}
+
 .modal-overlay {
   position: fixed;
   top: 0;
