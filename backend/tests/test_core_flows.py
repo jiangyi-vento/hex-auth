@@ -822,6 +822,57 @@ def test_get_client_ip_validates_and_bounds():
     assert len(ip) <= 45
 
 
+# ---------- 硬绑定席位策略 ----------
+
+def test_abnormal_client_still_occupies_seat():
+    """硬绑定：异常（离线）设备仍占用席位，新设备无法激活"""
+    db = make_db()
+    _, license = make_fixtures(db)
+    license.max_devices = 1
+    db.commit()
+    client = Client(
+        license_id=license.id, product_code=license.product_code,
+        client_fp="FP-HOG-001", client_type=ClientType.GUI,
+        ip_address="10.2.0.1", last_heartbeat=datetime.now() - timedelta(hours=48),
+        status=ClientStatus.NORMAL,
+    )
+    db.add(client)
+    db.commit()
+    assert mark_offline_clients(db) == 1  # 离线检测标为 ABNORMAL
+
+    resp = activate(fake_request(), ActivateRequest(
+        license_key=license.license_key,
+        client_fp="FP-NEWD-001",
+        client_type="gui",
+    ), db)
+
+    assert resp.success is False
+    assert resp.message == "Maximum number of devices reached"
+
+
+def test_disabled_client_frees_seat():
+    """管理员禁用设备后释放席位，新设备可激活（换机流程）"""
+    db = make_db()
+    _, license = make_fixtures(db)
+    license.max_devices = 1
+    db.commit()
+    client = Client(
+        license_id=license.id, product_code=license.product_code,
+        client_fp="FP-OLD-001", client_type=ClientType.GUI,
+        status=ClientStatus.DISABLED,
+    )
+    db.add(client)
+    db.commit()
+
+    resp = activate(fake_request(), ActivateRequest(
+        license_key=license.license_key,
+        client_fp="FP-NEW-001",
+        client_type="gui",
+    ), db)
+
+    assert resp.success is True
+
+
 if __name__ == "__main__":
     tests = [fn for name, fn in sorted(globals().items()) if name.startswith("test_") and callable(fn)]
     failed = 0

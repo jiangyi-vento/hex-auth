@@ -99,9 +99,11 @@ def activate(
         )
 
     # 6. 检查已激活设备数量（排除自身占用的席位，已激活设备重装后可正常重新激活）
+    #    硬绑定策略：NORMAL/ABNORMAL 均占用席位，仅管理员禁用(DISABLED)释放；
+    #    更换设备需管理员在后台删除旧设备
     seat_query = db.query(Client).filter(
         Client.license_id == license.id,
-        Client.status == ClientStatus.NORMAL
+        Client.status != ClientStatus.DISABLED
     )
     if existing_client:
         seat_query = seat_query.filter(Client.id != existing_client.id)
